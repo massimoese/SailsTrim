@@ -733,53 +733,22 @@ for _, (key, _, _, default, _, _, _) in CONTROLS.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
-# --- Pannello di regolazione: una alla volta, slider grande in pagina ------
-sel_col, sld_col = st.columns([1, 1.6])
-with sel_col:
-    chosen = st.selectbox("Regolazione", list(CONTROLS.keys()), index=2,
-                          label_visibility="collapsed")
-key, lo, hi, default, step, unit, hint = CONTROLS[chosen]
-with sld_col:
-    st.slider(chosen, lo, hi, step=step, key=key,
-              help=hint, label_visibility="collapsed")
-val = st.session_state[key]
-st.caption(f"**{chosen.split(' ', 1)[-1]}: {val:g} {unit}**"
-           + (f" — {hint}" if hint else ""))
-
-with st.expander("📋 Tutte le regolazioni correnti"):
-    riep = " · ".join(f"{n.split(' ', 1)[-1]} **{st.session_state[k]:g}{u}**"
-                      for n, (k, _, _, _, _, u, _) in CONTROLS.items())
-    st.markdown(riep)
-    if st.button("↺ Ripristina regolazioni base"):
-        for _, (k, _, _, d, _, _, _) in CONTROLS.items():
-            st.session_state[k] = d
-        st.rerun()
-
+# --- Stato barca (si aggiorna a ogni regolazione) ---------------------------
 s = st.session_state
+trim = Trim(s.main_sheet, s.traveller, s.vang, s.outhaul, s.cunningham,
+            s.backstay, float(s.jack_mm), s.jib_sheet, s.jib_car,
+            s.jib_halyard, s.shroud_cap, s.shroud_d2, s.shroud_d1, s.rake)
 tws_kn, twa = s.tws_kn, s.twa
-main_sheet, traveller, vang = s.main_sheet, s.traveller, s.vang
-outhaul, cunningham, backstay = s.outhaul, s.cunningham, s.backstay
-jack_mm = s.jack_mm
-jib_sheet, jib_car, jib_halyard = s.jib_sheet, s.jib_car, s.jib_halyard
-shroud_cap, shroud_d2, shroud_d1, rake = s.shroud_cap, s.shroud_d2, s.shroud_d1, s.rake
-
-trim = Trim(main_sheet, traveller, vang, outhaul, cunningham, backstay,
-            float(jack_mm), jib_sheet, jib_car, jib_halyard,
-            shroud_cap, shroud_d2, shroud_d1, rake)
 
 res = solve_equilibrium(tws_kn, twa, trim)
 shape, diag = res["shape"], res["diag"]
 sm, sj = diag["strips_main"], diag["strips_jib"]
 
-# --- Metriche -------------------------------------------------------------
-c1, c2, c3 = st.columns(3)
-c1.metric("Velocità barca", f"{res['v_kn']:.2f} kn")
-c2.metric("VMG", f"{res['vmg']:.2f} kn")
-c3.metric("Sbandamento", f"{res['heel']:.1f}°")
-c4, c5, c6 = st.columns(3)
-c4.metric("Timone (orza)", f"{res['helm']:.1f}°")
-c5.metric("Vento apparente", f"{res['aws_kn']:.1f} kn")
-c6.metric("AWA", f"{res['awa']:.0f}°")
+st.markdown(
+    f"🚤 **{res['v_kn']:.2f} kn** &nbsp;·&nbsp; VMG **{res['vmg']:.2f}** "
+    f"&nbsp;·&nbsp; sband. **{res['heel']:.1f}°** &nbsp;·&nbsp; "
+    f"timone **{res['helm']:.1f}°** &nbsp;·&nbsp; "
+    f"apparente **{res['aws_kn']:.1f} kn / {res['awa']:.0f}°**")
 
 warn = []
 if diag["head_luff_main"]:
@@ -811,8 +780,34 @@ if trim.jack_mm >= 24 and tws_kn < 8:
     warn.append(f"**Rig molto carico ({trim.jack_mm:.0f} mm) in aria leggera** — "
                 "strallo e vele troppo tesi/magri per questo vento: togli qualche "
                 "spessore per dare potenza")
-for w in warn:
-    st.warning(w)
+if warn:
+    with st.expander(f"⚠️ {len(warn)} avvisi di regolazione"):
+        for w in warn:
+            st.warning(w)
+
+# --- Pannello di regolazione: una alla volta, slider grande in pagina ------
+sel_col, sld_col = st.columns([1, 1.6])
+with sel_col:
+    chosen = st.selectbox("Regolazione", list(CONTROLS.keys()), index=2,
+                          label_visibility="collapsed")
+key, lo, hi, default, step, unit, hint = CONTROLS[chosen]
+with sld_col:
+    st.slider(chosen, lo, hi, step=step, key=key,
+              help=hint, label_visibility="collapsed")
+val = st.session_state[key]
+st.caption(f"**{chosen.split(' ', 1)[-1]}: {val:g} {unit}**"
+           + (f" — {hint}" if hint else ""))
+
+with st.expander("📋 Tutte le regolazioni correnti"):
+    riep = " · ".join(f"{n.split(' ', 1)[-1]} **{st.session_state[k]:g}{u}**"
+                      for n, (k, _, _, _, _, u, _) in CONTROLS.items())
+    st.markdown(riep)
+    if st.button("↺ Ripristina regolazioni base"):
+        for _, (k, _, _, d, _, _, _) in CONTROLS.items():
+            st.session_state[k] = d
+        st.rerun()
+
+
 
 tab_3d, tab_flow, tab_shape, tab_forces, tab_polar = st.tabs(
     ["⛵ Vela 3D e filetti", "🌀 Flusso 2D", "📐 Forma vele",
@@ -986,9 +981,11 @@ with tab_polar:
         angles = np.arange(35, 176, 5)
         return angles, [solve_equilibrium(tws, float(a), tr)["v_kn"] for a in angles]
 
-    trim_tuple = (main_sheet, traveller, vang, outhaul, cunningham, backstay,
-                  float(jack_mm), jib_sheet, jib_car, jib_halyard,
-                  shroud_cap, shroud_d2, shroud_d1, rake)
+    ss = st.session_state
+    trim_tuple = (ss.main_sheet, ss.traveller, ss.vang, ss.outhaul,
+                  ss.cunningham, ss.backstay, float(ss.jack_mm), ss.jib_sheet,
+                  ss.jib_car, ss.jib_halyard, ss.shroud_cap, ss.shroud_d2,
+                  ss.shroud_d1, ss.rake)
     angles, speeds = compute_polar(tws_kn, trim_tuple)
 
     fig4 = plt.figure(figsize=(5.5, 5.5))
