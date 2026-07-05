@@ -699,46 +699,69 @@ st.title("⛵ Swan 45 — Simulatore di regolazione vele")
 st.caption("Strip theory quasi-3D (vento apparente locale per ogni fascia d'altezza) "
            "+ flusso potenziale 2D. Didattico: mostra le *tendenze*, non è una CFD RANS.")
 
-with st.sidebar:
-    st.header("Condizioni")
-    tws_kn = st.slider("Vento reale TWS a 10 m [kn]", 4.0, 30.0, 14.0, 0.5)
-    twa = st.slider("Angolo al vento reale TWA [°]", 30.0, 175.0, 45.0, 1.0)
+# Registro dei comandi: (chiave, min, max, default, step, unità, help)
+CONTROLS = {
+    "🌬️ Vento reale TWS": ("tws_kn", 4.0, 30.0, 14.0, 0.5, "kn", None),
+    "🧭 Angolo al vento TWA": ("twa", 30.0, 175.0, 45.0, 1.0, "°", None),
+    "— Scotta randa": ("main_sheet", 0.0, 1.0, 0.75, 0.05, "",
+                       "1 = cazzata a ferro (chiude la balumina)"),
+    "— Carrello randa": ("traveller", 0.0, 1.0, 0.50, 0.05, "",
+                         "0 = tutto sottovento, 1 = sopravvento"),
+    "— Vang": ("vang", 0.0, 1.0, 0.4, 0.05, "", None),
+    "— Tesa base": ("outhaul", 0.0, 1.0, 0.6, 0.05, "", None),
+    "— Cunningham": ("cunningham", 0.0, 1.0, 0.2, 0.05, "", None),
+    "△ Scotta fiocco": ("jib_sheet", 0.0, 1.0, 0.75, 0.05, "", None),
+    "△ Carrello fiocco": ("jib_car", 0.0, 1.0, 0.45, 0.05, "",
+                          "0 = avanti (chiude la balumina), 1 = indietro (twist)"),
+    "△ Drizza fiocco": ("jib_halyard", 0.0, 1.0, 0.6, 0.05, "", None),
+    "⚙️ Martinetto (spessori)": ("jack_mm", 0.0, 30.0, 12.0, 2.0, "mm",
+                                 "Pre-tensiona tutto il sartiame, colpi da 2 mm"),
+    "⚙️ Paterazzo": ("backstay", 0.0, 1.0, 0.5, 0.05, "",
+                     "Flette l'albero e tesa lo strallo"),
+    "⚙️ Sartie alte/esterne (V1)": ("shroud_cap", 0.0, 1.0, 0.6, 0.05, "",
+                                    "Lasche = la penna cade sottovento"),
+    "⚙️ Diagonali (D2)": ("shroud_d2", 0.0, 1.0, 0.6, 0.05, "",
+                          "Lasche = più prebend a metà albero"),
+    "⚙️ Sartie basse (D1)": ("shroud_d1", 0.0, 1.0, 0.6, 0.05, "",
+                             "Lasche = più prebend basso"),
+    "⚙️ Rake albero": ("rake", 0.0, 1.0, 0.3, 0.05, "",
+                       "Appoppamento: sposta il CE a poppa, aumenta l'orza"),
+}
 
-    st.header("Randa")
-    main_sheet = st.slider("Scotta randa", 0.0, 1.0, 0.75, 0.05,
-                           help="1 = cazzata a ferro (chiude la balumina)")
-    traveller = st.slider("Carrello randa", 0.0, 1.0, 0.50, 0.05,
-                          help="0 = tutto sottovento, 1 = sopravvento")
-    vang = st.slider("Vang", 0.0, 1.0, 0.4, 0.05)
-    outhaul = st.slider("Tesa base", 0.0, 1.0, 0.6, 0.05)
-    cunningham = st.slider("Cunningham", 0.0, 1.0, 0.2, 0.05)
+# valori persistenti tra un rerun e l'altro
+for _, (key, _, _, default, _, _, _) in CONTROLS.items():
+    if key not in st.session_state:
+        st.session_state[key] = default
 
-    st.header("Fiocco")
-    jib_sheet = st.slider("Scotta fiocco", 0.0, 1.0, 0.75, 0.05)
-    jib_car = st.slider("Carrello fiocco", 0.0, 1.0, 0.45, 0.05,
-                        help="0 = avanti (chiude la balumina), 1 = indietro (twist)")
-    jib_halyard = st.slider("Drizza fiocco", 0.0, 1.0, 0.6, 0.05)
+# --- Pannello di regolazione: una alla volta, slider grande in pagina ------
+sel_col, sld_col = st.columns([1, 1.6])
+with sel_col:
+    chosen = st.selectbox("Regolazione", list(CONTROLS.keys()), index=2,
+                          label_visibility="collapsed")
+key, lo, hi, default, step, unit, hint = CONTROLS[chosen]
+with sld_col:
+    st.slider(chosen, lo, hi, step=step, key=key,
+              help=hint, label_visibility="collapsed")
+val = st.session_state[key]
+st.caption(f"**{chosen.split(' ', 1)[-1]}: {val:g} {unit}**"
+           + (f" — {hint}" if hint else ""))
 
-    st.header("Rig")
-    jack_mm = st.slider("Martinetto albero — spessori [mm]", 0, 30, 12, 2,
-                        help="Alzare l'albero col martinetto e inserire spessori "
-                             "sotto il piede pre-tensiona TUTTO il sartiame. "
-                             "Colpi da 2 mm: pochi = rig molle (sottovento in "
-                             "bando col vento), tanti = rig carico e strallo teso")
-    backstay = st.slider("Paterazzo", 0.0, 1.0, 0.5, 0.05,
-                         help="Flette l'albero e tesa lo strallo")
-    shroud_cap = st.slider("Sartie alte / esterne (V1)", 0.0, 1.0, 0.6, 0.05,
-                           help="Sostengono la testa d'albero: lasche = la penna "
-                                "cade sottovento (twist extra in alto) e lo strallo "
-                                "si allenta")
-    shroud_d2 = st.slider("Diagonali (D2)", 0.0, 1.0, 0.6, 0.05,
-                          help="Controllano il centro dell'albero: lasche = più "
-                               "prebend a metà = randa più magra nella pancia")
-    shroud_d1 = st.slider("Sartie basse (D1)", 0.0, 1.0, 0.6, 0.05,
-                          help="Controllano la base dell'albero: lasche = più "
-                               "prebend basso = randa più magra in basso")
-    rake = st.slider("Rake albero", 0.0, 1.0, 0.3, 0.05,
-                     help="Appoppamento: sposta il CE a poppa, aumenta l'orza")
+with st.expander("📋 Tutte le regolazioni correnti"):
+    riep = " · ".join(f"{n.split(' ', 1)[-1]} **{st.session_state[k]:g}{u}**"
+                      for n, (k, _, _, _, _, u, _) in CONTROLS.items())
+    st.markdown(riep)
+    if st.button("↺ Ripristina regolazioni base"):
+        for _, (k, _, _, d, _, _, _) in CONTROLS.items():
+            st.session_state[k] = d
+        st.rerun()
+
+s = st.session_state
+tws_kn, twa = s.tws_kn, s.twa
+main_sheet, traveller, vang = s.main_sheet, s.traveller, s.vang
+outhaul, cunningham, backstay = s.outhaul, s.cunningham, s.backstay
+jack_mm = s.jack_mm
+jib_sheet, jib_car, jib_halyard = s.jib_sheet, s.jib_car, s.jib_halyard
+shroud_cap, shroud_d2, shroud_d1, rake = s.shroud_cap, s.shroud_d2, s.shroud_d1, s.rake
 
 trim = Trim(main_sheet, traveller, vang, outhaul, cunningham, backstay,
             float(jack_mm), jib_sheet, jib_car, jib_halyard,
@@ -749,10 +772,11 @@ shape, diag = res["shape"], res["diag"]
 sm, sj = diag["strips_main"], diag["strips_jib"]
 
 # --- Metriche -------------------------------------------------------------
-c1, c2, c3, c4, c5, c6 = st.columns(6)
+c1, c2, c3 = st.columns(3)
 c1.metric("Velocità barca", f"{res['v_kn']:.2f} kn")
 c2.metric("VMG", f"{res['vmg']:.2f} kn")
 c3.metric("Sbandamento", f"{res['heel']:.1f}°")
+c4, c5, c6 = st.columns(3)
 c4.metric("Timone (orza)", f"{res['helm']:.1f}°")
 c5.metric("Vento apparente", f"{res['aws_kn']:.1f} kn")
 c6.metric("AWA", f"{res['awa']:.0f}°")
