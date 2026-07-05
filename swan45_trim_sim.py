@@ -733,6 +733,66 @@ for _, (key, _, _, default, _, _, _) in CONTROLS.items():
     if key not in st.session_state:
         st.session_state[key] = default
 
+# --- Ottimizzatore -----------------------------------------------------------
+KEY_SPECS = {k: (lo, hi, step) for _, (k, lo, hi, _, step, _, _) in CONTROLS.items()}
+OPT_UNDERWAY = ["main_sheet", "traveller", "vang", "outhaul", "cunningham",
+                "backstay", "jib_sheet", "jib_car", "jib_halyard"]
+OPT_RIG = ["jack_mm", "shroud_cap", "shroud_d2", "shroud_d1", "rake"]
+PRETTY = {k: n.split(" ", 1)[-1] for n, (k, *_) in CONTROLS.items()}
+
+
+def _trim_from(d):
+    return Trim(d["main_sheet"], d["traveller"], d["vang"], d["outhaul"],
+                d["cunningham"], d["backstay"], float(d["jack_mm"]),
+                d["jib_sheet"], d["jib_car"], d["jib_halyard"],
+                d["shroud_cap"], d["shroud_d2"], d["shroud_d1"], d["rake"])
+
+
+def _opt_base(r, twa, mode):
+    if mode == "Velocità":
+        return r["v_kn"]
+    if mode == "VMG":
+        return r["vmg"] if twa < 90 else -r["vmg"]
+    # Auto: VMG in bolina e in poppa, velocità al traverso
+    if twa < 70:
+        return r["vmg"]
+    if twa < 120:
+        return r["v_kn"]
+    return -r["vmg"]
+
+
+def _snap(v, lo, hi, step):
+    return float(np.clip(round(round((v - lo) / step) * step + lo, 6), lo, hi))
+
+
+@st.cache_data(show_spinner=False)
+def run_optimizer(cur_items, keys, tws, twa, mode, heel_max):
+    d = dict(cur_items)
+
+    def score(dd):
+        r = solve_equilibrium(tws, twa, _trim_from(dd))
+        pen = 0.20 * max(0.0, r["heel"] - heel_max) \
+            + 0.15 * max(0.0, abs(r["helm"]) - 8.0)
+        return _opt_base(r, twa, mode) - pen, r
+
+    s_old, r_old = score(d)
+    s_best, r_best = s_old, r_old
+    for phase in range(2):
+        for k in keys:
+            lo, hi, step = KEY_SPECS[k]
+            if phase == 0:      # griglia grossolana su tutto il range
+                cands = [_snap(c, lo, hi, step) for c in np.linspace(lo, hi, 7)]
+            else:               # raffinamento locale attorno al miglior valore
+                cands = [_snap(d[k] + i * step, lo, hi, step) for i in (-2, -1, 1, 2)]
+            for c in dict.fromkeys(cands):
+                if c == d[k]:
+                    continue
+                dd = dict(d); dd[k] = c
+                sc, r = score(dd)
+                if sc > s_best + 1e-4:
+                    s_best, r_best, d = sc, r, dd
+    return d, r_best, r_old
+
 # --- Stato barca (si aggiorna a ogni regolazione) ---------------------------
 s = st.session_state
 trim = Trim(s.main_sheet, s.traveller, s.vang, s.outhaul, s.cunningham,
@@ -809,9 +869,9 @@ with st.expander("📋 Tutte le regolazioni correnti"):
 
 
 
-tab_3d, tab_flow, tab_shape, tab_forces, tab_polar = st.tabs(
+tab_3d, tab_flow, tab_shape, tab_forces, tab_polar, tab_opt = st.tabs(
     ["⛵ Vela 3D e filetti", "🌀 Flusso 2D", "📐 Forma vele",
-     "⚖️ Forze", "🧭 Polare"])
+     "⚖️ Forze", "🧭 Polare", "🎯 Ottimizza"])
 
 # --- Vela 3D e filetti ------------------------------------------------------
 with tab_3d:
@@ -1003,3 +1063,50 @@ st.divider()
 st.caption("⚠️ Modello semplificato a scopo didattico (strip theory + flusso "
            "potenziale + bilanci quasi-statici). Per analisi reali servono "
            "RANS CFD e un VPP calibrato.")
+
+# --- Ottimizzatore (contenuto scheda) ----------------------------------------
+with tab_opt:
+    st.caption(f"Cerca la regolazione migliore per le condizioni attuali "
+               f"(TWS **{tws_kn:g} kn**, TWA **{twa:g}°**) partendo da quella "
+               "corrente. Discesa per coordinate sui passi reali degli slider.")
+    obiettivo = st.radio("Obiettivo", ["Auto", "VMG", "Velocità"], horizontal=True,
+                         help="Auto: VMG in bolina (<70°) e in poppa (>120°), "
+                              "velocità al traverso")
+    lock_rig = st.checkbox("🔒 Blocca il rig (martinetto, sartie, rake): ottimizza "
+                           "solo le manovre regolabili in navigazione", value=True)
+    heel_max = st.slider("Sbandamento massimo accettato [°]", 15, 35, 25)
+
+    if st.button("🎯 Ottimizza regolazioni", type="primary"):
+        keys = tuple(OPT_UNDERWAY + ([] if lock_rig else OPT_RIG))
+        cur = tuple(sorted((k, float(st.session_state[k]))
+                           for k in OPT_UNDERWAY + OPT_RIG))
+        with st.spinner("Cerco la regolazione migliore (qualche secondo)..."):
+            prop, r_new, r_old = run_optimizer(cur, keys, float(tws_kn),
+                                               float(twa), obiettivo, float(heel_max))
+        st.session_state["opt_prop"] = (prop, r_new, r_old)
+
+    if "opt_prop" in st.session_state:
+        prop, r_new, r_old = st.session_state["opt_prop"]
+        d1, d2, d3 = st.columns(3)
+        d1.metric("Velocità", f"{r_new['v_kn']:.2f} kn",
+                  f"{r_new['v_kn'] - r_old['v_kn']:+.2f}")
+        d2.metric("VMG", f"{abs(r_new['vmg']):.2f} kn",
+                  f"{abs(r_new['vmg']) - abs(r_old['vmg']):+.2f}")
+        d3.metric("Sbandamento", f"{r_new['heel']:.1f}°",
+                  f"{r_new['heel'] - r_old['heel']:+.1f}°", delta_color="inverse")
+
+        changes = [(PRETTY[k], float(st.session_state[k]), v)
+                   for k, v in prop.items()
+                   if abs(v - float(st.session_state[k])) > 1e-9]
+        if changes:
+            st.markdown("**Modifiche proposte:**")
+            st.markdown("\n".join(f"- {n}: {o:g} → **{v:g}**"
+                                  for n, o, v in changes))
+            if st.button("✅ Applica queste regolazioni"):
+                for k, v in prop.items():
+                    st.session_state[k] = v
+                del st.session_state["opt_prop"]
+                st.rerun()
+        else:
+            st.success("La regolazione attuale è già ottimale per questo "
+                       "obiettivo — complimenti al trimmer! 🏆")
