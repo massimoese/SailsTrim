@@ -404,8 +404,10 @@ def sail_surface(which, shape: SailShape, strips, n_h=22, n_c=13):
         angle0, twist = shape.main_angle, shape.main_twist
         camber0, draft = shape.main_camber, shape.main_draft
         chord0 = 6.0
-        # inferitura sull'albero, inclinato del rake verso poppa
-        x_luff = 0.0 - np.tan(np.radians(shape.rake_deg)) * (g["z0"] + g["span"] * hs)
+        # inferitura sull'albero: rake + imbananamento dal paterazzo
+        zs_luff = g["z0"] + g["span"] * hs
+        x_luff = -np.tan(np.radians(shape.rake_deg)) * zs_luff \
+            + mast_bend_fore(zs_luff, shape, Z_BOOM + MAIN_SPAN + 0.4)
     else:
         angle0, twist = shape.jib_angle, shape.jib_twist
         camber0, draft = shape.jib_camber, shape.jib_draft
@@ -585,14 +587,27 @@ def mast_lateral(z, shape: SailShape, top):
     return slack * 0.40 * (np.asarray(z) / top) ** 2
 
 
+def mast_bend_fore(z, shape: SailShape, top):
+    """Imbananamento: il paterazzo tira la testa a poppa e la pancia
+    dell'albero fugge a prua, quanto lo permettono D1 e D2 (e il
+    martinetto, che è già dentro le tensioni efficaci). Piede e testa
+    sono vincolati (mastra e strallo/paterazzo): flessione nulla agli
+    estremi, massima nel mezzo. Stessa legge che smagrisce la randa."""
+    h = np.clip(np.asarray(z) / top, 0.0, 1.0)
+    amp = 0.38 * (0.12 + 0.88 * shape.backstay) \
+        * (0.60 + 0.22 * max(0.0, 1.2 - shape.shroud_d2)
+           + 0.18 * max(0.0, 1.3 - shape.shroud_d1))
+    return min(amp, 0.40) * np.sin(np.pi * h)
+
+
 def rig_traces(shape: SailShape, heel):
     tr = []
     rake = np.tan(np.radians(shape.rake_deg))
     top = Z_BOOM + MAIN_SPAN + 0.4
 
-    # albero: flesso lateralmente se le alte sono lasche
+    # albero: imbananato dal paterazzo, flesso lateralmente se le alte sono lasche
     zm = np.linspace(1.15, top, 24)
-    xm = -rake * zm
+    xm = -rake * zm + mast_bend_fore(zm, shape, top)
     ym = mast_lateral(zm, shape, top)
     tr.append(_line3d(xm, ym, zm, "#2b2b2b", 7, heel))
 
@@ -609,10 +624,12 @@ def rig_traces(shape: SailShape, heel):
 
     z1, z2 = SPREADER_Z
     for side in (1, -1):
-        s1 = (float(-rake * z1), side * SPREADER_LEN[0] + float(mast_lateral(z1, shape, top)), z1)
-        s2 = (float(-rake * z2), side * SPREADER_LEN[1] + float(mast_lateral(z2, shape, top)), z2)
-        r1 = (float(-rake * z1), float(mast_lateral(z1, shape, top)), z1)
-        r2 = (float(-rake * z2), float(mast_lateral(z2, shape, top)), z2)
+        xb1 = float(-rake * z1 + mast_bend_fore(z1, shape, top))
+        xb2 = float(-rake * z2 + mast_bend_fore(z2, shape, top))
+        s1 = (xb1, side * SPREADER_LEN[0] + float(mast_lateral(z1, shape, top)), z1)
+        s2 = (xb2, side * SPREADER_LEN[1] + float(mast_lateral(z2, shape, top)), z2)
+        r1 = (xb1, float(mast_lateral(z1, shape, top)), z1)
+        r2 = (xb2, float(mast_lateral(z2, shape, top)), z2)
         head = (x_head, y_head, top)
         land = (CHAINPLATE[0], side * CHAINPLATE[1], CHAINPLATE[2])
         # crocette
